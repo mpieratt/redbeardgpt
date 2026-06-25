@@ -4,8 +4,29 @@ import { AlertTriangle, Info, CheckCircle2, XCircle } from 'lucide-react';
 
 function App() {
   // --- STATE ---
-  // Group 1: CapEx
-  const [gpuCost, setGpuCost] = useState<number>(1600);
+  // --- HARDWARE DEFS ---
+  const GPU_OPTIONS = [
+    { id: 'rtx4090', name: 'Nvidia RTX 4090', vram: 24, defaultCost: 1600 },
+    { id: 'rtx5090', name: 'Nvidia RTX 5090', vram: 32, defaultCost: 1999 },
+    { id: 'rtx3090', name: 'Nvidia RTX 3090 (Used)', vram: 24, defaultCost: 800 },
+    { id: 'dual4090', name: 'Dual Nvidia RTX 4090', vram: 48, defaultCost: 3200 },
+    { id: 'dual3090', name: 'Dual Nvidia RTX 3090', vram: 48, defaultCost: 1600 },
+    { id: 'rtx6000ada', name: 'Nvidia RTX 6000 Ada', vram: 48, defaultCost: 6800 },
+    { id: 'macstudio', name: 'Mac Studio M2 Ultra (Unified)', vram: 192, defaultCost: 5500 },
+  ];
+
+  // --- STATE ---
+  // Group 1: Hardware & Model Assumptions (Moved to top)
+  const [selectedGpuId, setSelectedGpuId] = useState<string>('rtx4090');
+  const [modelSize, setModelSize] = useState<number>(32);
+  const [quantization, setQuantization] = useState<number>(0.5); // Default: 4-bit (0.5 bytes)
+  const [contextWindow, setContextWindow] = useState<number>(8); // In Thousands (8k)
+
+  const selectedGpu = GPU_OPTIONS.find(g => g.id === selectedGpuId) || GPU_OPTIONS[0];
+  const systemVram = selectedGpu.vram;
+  const gpuCost = selectedGpu.defaultCost;
+
+  // Group 2: CapEx
   const [systemCost, setSystemCost] = useState<number>(1400);
 
   // Group 2: OpEx
@@ -23,10 +44,6 @@ function App() {
   const [subscriptions, setSubscriptions] = useState<number>(10);
   const [savings, setSavings] = useState<number>(20);
 
-  // Group 5: Hardware & Model Targets
-  const [systemVram, setSystemVram] = useState<number>(24);
-  const [modelSize, setModelSize] = useState<number>(32);
-  const [quantization, setQuantization] = useState<number>(0.5); // Default: 4-bit (0.5 bytes)
 
   // --- CALCULATIONS ---
   // Monthly multiplier
@@ -66,7 +83,11 @@ function App() {
 
   // VRAM Logic
   const rawWeightsVram = modelSize * quantization;
-  const estimatedVram = rawWeightsVram * 1.20;
+  // KV Cache estimation: roughly proportional to context window and model size
+  // Formula approximation: 0.1GB per 1k context for a 32B model, scaled by model size.
+  const kvCacheVram = (contextWindow / 8) * (modelSize / 32) * 1.5; 
+  // Base framework overhead (CUDA contexts, etc.) ~ 1.5GB
+  const estimatedVram = rawWeightsVram + kvCacheVram + 1.5;
   const isFeasible = estimatedVram <= systemVram;
 
   const getSuggestedModels = (vram: number) => {
@@ -87,17 +108,61 @@ function App() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left Column (Inputs) */}
         <div className="space-y-6">
+
+          {/* Hardware & Model Assumptions */}
+          <div className="p-6 bg-slate-900 rounded-xl border border-slate-800">
+            <h2 className="text-xl font-semibold mb-4 text-emerald-400">Hardware & Model Assumptions</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Select Primary Compute Node</label>
+                <select 
+                  value={selectedGpuId} 
+                  onChange={(e) => setSelectedGpuId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-emerald-500"
+                >
+                  {GPU_OPTIONS.map(gpu => (
+                    <option key={gpu.id} value={gpu.id}>
+                      {gpu.name} ({gpu.vram}GB) - ${gpu.defaultCost}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="pt-2">
+                <label className="block text-sm font-medium text-slate-300 mb-1">Target Model Size (Billion Params)</label>
+                <div className="flex gap-4 items-center">
+                  <input type="range" min="7" max="400" step="1" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-full accent-emerald-500" />
+                  <input type="number" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Context Window (Thousands of Tokens)</label>
+                <div className="flex gap-4 items-center">
+                  <input type="range" min="2" max="128" step="2" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value))} className="w-full accent-emerald-500" />
+                  <input type="number" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Quantization Level</label>
+                <select 
+                  value={quantization} 
+                  onChange={(e) => setQuantization(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value={2}>FP16 / Uncompressed (2 bytes/param)</option>
+                  <option value={1}>8-bit / INT8 (1 byte/param)</option>
+                  <option value={0.5}>4-bit / INT4 (0.5 bytes/param)</option>
+                </select>
+              </div>
+            </div>
+          </div>
           
           {/* CapEx */}
           <div className="p-6 bg-slate-900 rounded-xl border border-slate-800">
             <h2 className="text-xl font-semibold mb-4 text-emerald-400">Capital Expenditure (CapEx)</h2>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">GPU Cost ($)</label>
-                <div className="flex gap-4 items-center">
-                  <input type="range" min="200" max="4000" step="50" value={gpuCost} onChange={(e) => setGpuCost(Number(e.target.value))} className="w-full accent-emerald-500" />
-                  <input type="number" value={gpuCost} onChange={(e) => setGpuCost(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
-                </div>
+              <div className="flex justify-between items-center bg-slate-950/50 p-3 rounded border border-slate-800">
+                <span className="text-sm font-medium text-slate-300">GPU Cost ({selectedGpu.name})</span>
+                <span className="text-slate-100 font-semibold">${gpuCost.toLocaleString()}</span>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">System Components Cost ($)</label>
@@ -201,39 +266,6 @@ function App() {
                   <span className="text-slate-400">Total Daytime Monthly Offset:</span>
                   <span className="text-emerald-400">${totalDaytimeOffset.toLocaleString()}</span>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Hardware & Model Targets */}
-          <div className="p-6 bg-slate-900 rounded-xl border border-slate-800">
-            <h2 className="text-xl font-semibold mb-4 text-emerald-400">Hardware & Model Targets</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Total System VRAM (GB)</label>
-                <div className="flex gap-4 items-center">
-                  <input type="range" min="8" max="192" step="4" value={systemVram} onChange={(e) => setSystemVram(Number(e.target.value))} className="w-full accent-emerald-500" />
-                  <input type="number" value={systemVram} onChange={(e) => setSystemVram(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Target Model Size (Billion Params)</label>
-                <div className="flex gap-4 items-center">
-                  <input type="range" min="7" max="400" step="1" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-full accent-emerald-500" />
-                  <input type="number" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Quantization Level</label>
-                <select 
-                  value={quantization} 
-                  onChange={(e) => setQuantization(Number(e.target.value))}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-emerald-500"
-                >
-                  <option value={2}>FP16 / Uncompressed (2 bytes/param)</option>
-                  <option value={1}>8-bit / INT8 (1 byte/param)</option>
-                  <option value={0.5}>4-bit / INT4 (0.5 bytes/param)</option>
-                </select>
               </div>
             </div>
           </div>
