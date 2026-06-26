@@ -12,15 +12,15 @@ function App() {
     { id: 'dual4090', name: 'Dual Nvidia RTX 4090', vram: 48, defaultCost: 3200 },
     { id: 'dual3090', name: 'Dual Nvidia RTX 3090', vram: 48, defaultCost: 1600 },
     { id: 'rtx6000ada', name: 'Nvidia RTX 6000 Ada', vram: 48, defaultCost: 6800 },
-    { id: 'macstudio', name: 'Mac Studio M2 Ultra (Unified)', vram: 192, defaultCost: 5500 },
+    { id: 'framework', name: 'Framework Desktop (Unified)', vram: 128, defaultCost: 2000 },
   ];
 
+  // --- CONSTANTS ---
+  const quantization = 0.5; // 4-bit (0.5 bytes/param)
+
   // --- STATE ---
-  // Group 1: Hardware & Model Assumptions (Moved to top)
+  // Group 1: Hardware Selection
   const [selectedGpuId, setSelectedGpuId] = useState<string>('rtx4090');
-  const [modelSize, setModelSize] = useState<number>(32);
-  const [quantization, setQuantization] = useState<number>(0.5); // Default: 4-bit (0.5 bytes)
-  const [contextWindow, setContextWindow] = useState<number>(8); // In Thousands (8k)
 
   const selectedGpu = GPU_OPTIONS.find(g => g.id === selectedGpuId) || GPU_OPTIONS[0];
   const systemVram = selectedGpu.vram;
@@ -41,7 +41,7 @@ function App() {
   const [rentalWindowB, setRentalWindowB] = useState<number>(8);
 
   // Group 4: Daytime Revenue & Savings
-  const [subscriptions, setSubscriptions] = useState<number>(10);
+  const [subscriptions, setSubscriptions] = useState<number>(30);
   const [savings, setSavings] = useState<number>(20);
 
 
@@ -81,13 +81,39 @@ function App() {
   const scenarioA = useMemo(() => calculateScenario(24, occupancyA), [occupancyA, rentalRate, loadWatts, idleWatts, electricityRate, totalCapEx, totalDaytimeOffset]);
   const scenarioB = useMemo(() => calculateScenario(rentalWindowB, occupancyB), [rentalWindowB, occupancyB, rentalRate, loadWatts, idleWatts, electricityRate, totalCapEx, totalDaytimeOffset]);
 
-  // VRAM Logic
-  const rawWeightsVram = modelSize * quantization;
-  // KV Cache estimation: roughly proportional to context window and model size
-  // Formula approximation: 0.1GB per 1k context for a 32B model, scaled by model size.
-  const kvCacheVram = (contextWindow / 8) * (modelSize / 32) * 1.5; 
-  // Base framework overhead (CUDA contexts, etc.) ~ 1.5GB
-  const estimatedVram = rawWeightsVram + kvCacheVram + 1.5;
+  // VRAM Logic (Dynamic Max-Out Algorithm)
+  const optimalConfig = useMemo(() => {
+    const modelSizes = [400, 235, 104, 72, 35, 32, 27, 24, 14, 8];
+    const contextWindows = [128, 64, 32, 16, 8, 4];
+    
+    let bestModelSize = 8;
+    let bestContext = 4;
+    let bestEstimatedVram = 0;
+
+    for (const ms of modelSizes) {
+      for (const cw of contextWindows) {
+        const est = (ms * quantization) + ((cw / 8) * (ms / 32) * 1.5) + 1.5;
+        if (est <= systemVram) {
+          bestModelSize = ms;
+          bestContext = cw;
+          bestEstimatedVram = est;
+          break; // Found max context for this model size
+        }
+      }
+      if (bestEstimatedVram > 0) break; // Found max model size
+    }
+    
+    // Fallback if systemVram is tiny
+    if (bestEstimatedVram === 0) {
+       bestModelSize = 8;
+       bestContext = 4;
+       bestEstimatedVram = (8 * quantization) + ((4 / 8) * (8 / 32) * 1.5) + 1.5;
+    }
+
+    return { modelSize: bestModelSize, contextWindow: bestContext, estimatedVram: bestEstimatedVram };
+  }, [systemVram]);
+
+  const { modelSize, contextWindow, estimatedVram } = optimalConfig;
   const isFeasible = estimatedVram <= systemVram;
 
   const getSuggestedModels = (vram: number) => {
@@ -111,7 +137,7 @@ function App() {
 
           {/* Hardware & Model Assumptions */}
           <div className="p-6 bg-slate-900 rounded-xl border border-slate-800">
-            <h2 className="text-xl font-semibold mb-4 text-emerald-400">Hardware & Model Assumptions</h2>
+            <h2 className="text-xl font-semibold mb-4 text-emerald-400">Hardware Selection</h2>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">Select Primary Compute Node</label>
@@ -127,31 +153,9 @@ function App() {
                   ))}
                 </select>
               </div>
-              <div className="pt-2">
-                <label className="block text-sm font-medium text-slate-300 mb-1">Target Model Size (Billion Params)</label>
-                <div className="flex gap-4 items-center">
-                  <input type="range" min="7" max="400" step="1" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-full accent-emerald-500" />
-                  <input type="number" value={modelSize} onChange={(e) => setModelSize(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Context Window (Thousands of Tokens)</label>
-                <div className="flex gap-4 items-center">
-                  <input type="range" min="2" max="128" step="2" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value))} className="w-full accent-emerald-500" />
-                  <input type="number" value={contextWindow} onChange={(e) => setContextWindow(Number(e.target.value))} className="w-24 px-3 py-1 bg-slate-950 border border-slate-700 rounded text-slate-100" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Quantization Level</label>
-                <select 
-                  value={quantization} 
-                  onChange={(e) => setQuantization(Number(e.target.value))}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-emerald-500"
-                >
-                  <option value={2}>FP16 / Uncompressed (2 bytes/param)</option>
-                  <option value={1}>8-bit / INT8 (1 byte/param)</option>
-                  <option value={0.5}>4-bit / INT4 (0.5 bytes/param)</option>
-                </select>
+              
+              <div className="pt-2 text-sm text-slate-400">
+                <p><strong>Assumptions:</strong> VRAM capability checks dynamically max out the node's potential, currently assuming a {modelSize}B parameter model at {contextWindow}k context utilizing 4-bit (INT4) quantization.</p>
               </div>
             </div>
           </div>
